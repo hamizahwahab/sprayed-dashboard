@@ -1,0 +1,131 @@
+@import "tailwindcss";
+
+:root {
+  --sprayed-bg: #0d0d0d;
+  --sprayed-panel: #1a1a1a;
+  --sprayed-card: #242424;
+  --sprayed-border: rgba(255, 255, 255, 0.06);
+  --sprayed-accent: #22C55E;
+  --sprayed-accent2: #4ADE80;
+  --sprayed-text: #f5f5f5;
+  --sprayed-text-muted: #888888;
+}
+
+@theme inline {
+  --color-background: var(--sprayed-bg);
+  --color-foreground: #ededed;
+  --font-sans: system-ui, -apple-system, sans-serif;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: var(--sprayed-bg);
+  color: var(--sprayed-text);
+  -webkit-font-smoothing: antialiased;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* TV Optimization: Prevent text blurring on large screens */
+* {
+  text-rendering: optimizeLegibility;
+}
+
+/* ============ MAIN LAYOUT (CSS Grid) ============ */
+.main-layout {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ============ DASHBOARD GRID (2x2 chart area) ============ */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 10px;
+  min-height: 0;
+  padding: 10px 10px 0 10px;
+}
+
+/* ============ GRAPH CARD ============ */
+.graph-card {
+  background-color: var(--sprayed-card);
+  border: 1px solid var(--sprayed-border);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.graph-card .graph-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--sprayed-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.graph-card .graph-value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--sprayed-text);
+  margin-bottom: 4px;
+  flex-shrink: 0;
+}
+
+.graph-card .graph-subtitle {
+  font-size: 0.75rem;
+  color: var(--sprayed-text-muted);
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.graph-card .chart-container {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ============ FOOTER SUMMARY ============ */
+.footer-summary {
+  display: flex;
+  padding: 6px 10px 10px 10px;
+  gap: 8px;
+}
+
+.footer-card {
+  flex: 1;
+  background-color: var(--sprayed-panel);
+  border: 1px solid var(--sprayed-border);
+  border-radius: 8px;
+  padding: 8px 16px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.footer-card .label {
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: var(--sprayed-accent2);
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  white-space: nowrap;
+}
+
+.footer-card .value {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--sprayed-accent);
+}
