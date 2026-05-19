@@ -11,7 +11,8 @@
     "lint": "eslint",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:3000 && electron . --dev\"",
     "electron:build": "npm run build && electron-builder",
-    "electron:start": "electron ."
+    "electron:start": "electron .",
+    "electron:dev:3001": "concurrently \"npm run dev -- -p 3001\" \"wait-on http://localhost:3001 && electron . --dev --port 3001\""
   },
   "dependencies": {
     "next": "16.2.6",

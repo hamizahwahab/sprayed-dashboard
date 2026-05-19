@@ -8,6 +8,14 @@ export interface P2PMetric {
   created_at: string;
 }
 
+export interface SeedlingMetric {
+  id: number;
+  date: string;
+  month: string;
+  daily_value: number;
+  created_at: string;
+}
+
 // Chart data point (used by Recharts)
 export interface ChartDataPoint {
   label: string;

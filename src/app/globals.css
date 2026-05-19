@@ -56,7 +56,7 @@ html, body {
   background-color: var(--sprayed-card);
   border: 1px solid var(--sprayed-border);
   border-radius: 12px;
-  padding: 16px;
+  padding: 16px 16px 5px 16px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -71,6 +71,25 @@ html, body {
   letter-spacing: 1px;
   margin-bottom: 8px;
   flex-shrink: 0;
+}
+
+/* Alert/Danger mode — only graph internals turn red, card background stays the same */
+.graph-card.danger .graph-title {
+  color: #EF4444;
+  animation: blink-danger 1s ease-in-out infinite;
+}
+
+.graph-card.danger .recharts-cartesian-axis-tick-value {
+  fill: rgba(239, 68, 68, 0.7) !important;
+}
+
+.graph-card.danger .recharts-cartesian-axis-line {
+  stroke: rgba(239, 68, 68, 0.2) !important;
+}
+
+@keyframes blink-danger {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
 }
 
 .graph-card .graph-value {
