@@ -83,6 +83,8 @@ npm run electron:build
 
 ## API Endpoints (Port 8002)
 
+See [API_DOCS.md](./API_DOCS.md) for full documentation including request/response examples, status codes, validation rules, and database schema.
+
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
 | GET | `/api/p2p-metrics` | Get all P2P metrics | No |
