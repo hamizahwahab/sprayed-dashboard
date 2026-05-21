@@ -14,6 +14,13 @@
 @theme inline {
   --color-background: var(--sprayed-bg);
   --color-foreground: #ededed;
+  --color-card: var(--sprayed-card);
+  --color-panel: var(--sprayed-panel);
+  --color-border: var(--sprayed-border);
+  --color-accent: var(--sprayed-accent);
+  --color-accent2: var(--sprayed-accent2);
+  --color-text: var(--sprayed-text);
+  --color-text-muted: var(--sprayed-text-muted);
   --font-sans: system-ui, -apple-system, sans-serif;
 }
 
@@ -92,6 +99,22 @@ html, body {
   50% { opacity: 0.25; }
 }
 
+/* Error banner shown when API is unreachable */
+.error-banner {
+  position: fixed;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  padding: 6px 16px;
+  font-size: 0.75rem;
+  color: #FCA5A5;
+  z-index: 50;
+  backdrop-filter: blur(4px);
+}
+
 .graph-card .graph-value {
   font-size: 2rem;
   font-weight: 700;
@@ -119,6 +142,27 @@ html, body {
   display: flex;
   padding: 6px 10px 10px 10px;
   gap: 8px;
+}
+
+.footer-group {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.footer-group-label {
+  font-size: 0.55rem;
+  font-weight: 700;
+  color: var(--sprayed-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  padding-left: 2px;
+}
+
+.footer-group-cards {
+  display: flex;
+  gap: 4px;
 }
 
 .footer-card {

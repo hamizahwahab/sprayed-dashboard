@@ -1,21 +1,33 @@
 const { contextBridge, ipcRenderer } = require('electron');
+const { GET_P2P_METRICS, GET_SEEDLING_METRICS, REFRESH_P2P, REFRESH_SEEDLING } = require('./ipc-channels');
+
+let p2pRefreshHandler = null;
+let seedlingRefreshHandler = null;
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // P2P Metrics
-  getP2PMetrics: () => ipcRenderer.invoke('db:getP2PMetrics'),
+  getP2PMetrics: () => ipcRenderer.invoke(GET_P2P_METRICS),
   onRefreshP2PMetrics: (callback) => {
-    ipcRenderer.on('p2p-metrics:refresh', () => callback());
+    p2pRefreshHandler = () => callback();
+    ipcRenderer.on(REFRESH_P2P, p2pRefreshHandler);
   },
   removeRefreshListener: () => {
-    ipcRenderer.removeAllListeners('p2p-metrics:refresh');
+    if (p2pRefreshHandler) {
+      ipcRenderer.removeListener(REFRESH_P2P, p2pRefreshHandler);
+      p2pRefreshHandler = null;
+    }
   },
 
   // Seedling Metrics
-  getSeedlingMetrics: () => ipcRenderer.invoke('db:getSeedlingMetrics'),
+  getSeedlingMetrics: () => ipcRenderer.invoke(GET_SEEDLING_METRICS),
   onRefreshSeedlingMetrics: (callback) => {
-    ipcRenderer.on('seedling-metrics:refresh', () => callback());
+    seedlingRefreshHandler = () => callback();
+    ipcRenderer.on(REFRESH_SEEDLING, seedlingRefreshHandler);
   },
   removeSeedlingRefreshListener: () => {
-    ipcRenderer.removeAllListeners('seedling-metrics:refresh');
+    if (seedlingRefreshHandler) {
+      ipcRenderer.removeListener(REFRESH_SEEDLING, seedlingRefreshHandler);
+      seedlingRefreshHandler = null;
+    }
   },
 });

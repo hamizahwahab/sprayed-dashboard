@@ -12,6 +12,27 @@ import {
 } from 'recharts';
 import type { ChartDataPoint } from '@/types';
 
+// Props received by Recharts custom tick renderer
+interface CustomTickProps {
+  x: number | string;
+  y: number | string;
+  payload: { value: string };
+  index: number;
+  visibleTicksCount: number;
+}
+
+// Resolve tick fill color — extracted from nested ternary for readability
+function getTickFill(danger: boolean, isMonthStart: boolean, isLast: boolean): string {
+  if (danger) {
+    if (isMonthStart) return '#F87171';
+    if (isLast) return '#EF4444';
+    return 'rgba(239,68,68,0.6)';
+  }
+  if (isMonthStart) return '#4ADE80';
+  if (isLast) return '#22C55E';
+  return '#888';
+}
+
 interface AreaChartCardProps {
   title: string;
   data: ChartDataPoint[];
@@ -40,7 +61,6 @@ export default function AreaChartCard({
 }: AreaChartCardProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
-  const [measured, setMeasured] = useState(false);
 
   const measure = useCallback(() => {
     const el = containerRef.current;
@@ -48,7 +68,6 @@ export default function AreaChartCard({
     const rect = el.getBoundingClientRect();
     if (rect.width > 0 && rect.height > 0) {
       setSize({ width: rect.width, height: rect.height });
-      setMeasured(true);
     }
   }, []);
 
@@ -68,7 +87,7 @@ export default function AreaChartCard({
   }, [measure]);
 
   const hasData = data.length > 0;
-  const showChart = measured && hasData && size.width > 0 && size.height > 0;
+  const showChart = hasData && size.width > 0 && size.height > 0;
 
   // Resolve colors: if danger mode, override to red
   const resolvedAccent = danger ? '#EF4444' : accentColor;
@@ -76,7 +95,7 @@ export default function AreaChartCard({
 
   // Custom tick renderer for spaced labels (every Nth day + month starts + last point)
   const useSpacing = tickSpacing > 1;
-  const renderCustomTick = (props: any) => {
+  const renderCustomTick = (props: CustomTickProps) => {
     const { x, y, payload, index } = props;
     const value: string = payload.value;
     const isMonthStart = value.includes(' ');
@@ -92,7 +111,7 @@ export default function AreaChartCard({
           x={0}
           y={14}
           textAnchor="middle"
-          fill={danger ? (isMonthStart ? '#F87171' : isLast ? '#EF4444' : 'rgba(239,68,68,0.6)') : (isMonthStart ? '#4ADE80' : isLast ? '#22C55E' : '#888')}
+          fill={getTickFill(danger, isMonthStart, isLast)}
           fontSize={isMonthStart || isLast ? 11 : 10}
           fontWeight={isMonthStart || isLast ? 600 : 400}
           visibility={showLabel ? 'visible' : 'hidden'}
@@ -129,7 +148,7 @@ export default function AreaChartCard({
               dataKey="label"
               tick={useSpacing ? renderCustomTick : { fontSize: 10, fill: '#888' }}
               axisLine={{ stroke: 'rgba(255,255,255,0.05)' }}
-              tickLine={useSpacing ? false : false}
+              tickLine={false}
               interval={useSpacing ? 0 : undefined}
             >
               {xAxisLabel && (

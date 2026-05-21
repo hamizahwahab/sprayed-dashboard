@@ -1,8 +1,12 @@
+require('dotenv').config();
+
 const { app, BrowserWindow, ipcMain, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const crypto = require('crypto');
 const initSqlJs = require('sql.js');
+const { GET_P2P_METRICS, GET_SEEDLING_METRICS, REFRESH_P2P, REFRESH_SEEDLING } = require('./ipc-channels');
 
 let mainWindow;
 let db;
@@ -23,11 +27,16 @@ const devPort = (() => {
 const HTTP_PORT = parseInt(process.env.HTTP_PORT, 10) || 8002;
 const API_KEY = process.env.API_KEY || 'SPRAYED-DASHBOARD-2024';
 
-// Helper to check API key
+// Helper to check API key (timing-safe comparison)
 function isValidApiKey(req) {
   if (isDevMode) return true;
   const apiKey = req.headers['x-api-key'];
-  return apiKey === API_KEY;
+  if (typeof apiKey !== 'string') return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(apiKey), Buffer.from(API_KEY));
+  } catch {
+    return false;
+  }
 }
 
 async function createWindow() {
@@ -75,7 +84,12 @@ async function createWindow() {
 }
 
 async function initDatabase() {
-  const SQL = await initSqlJs();
+  const SQL = await initSqlJs({
+    // In development, WASM is in node_modules; in production, it's in extraResources
+    locateFile: (file) => app.isPackaged
+      ? path.join(process.resourcesPath, file)
+      : path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', file),
+  });
   dbPath = path.join(app.getPath('userData'), 'sprayed.db');
 
   // Load existing database or create new one
@@ -110,6 +124,10 @@ async function initDatabase() {
     )
   `);
 
+  // UNIQUE indexes on date — required for INSERT OR IGNORE to reject duplicates
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_p2p_date ON p2p_metrics(date)`);
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_seedling_date ON seedling_metrics(date)`);
+
   saveDatabase();
   console.log('Database initialized at:', dbPath);
 }
@@ -127,6 +145,19 @@ function saveDatabase() {
 // ──────────────────────────────────────────────
 
 const MAX_BODY_BYTES = 1024 * 16; // 16 KB max body
+
+// Whitelist of allowed table names — prevents SQL injection via table variable
+const ALLOWED_TABLES = new Set(['p2p_metrics', 'seedling_metrics']);
+
+// Safe db.exec() wrapper that validates table names against whitelist
+function execSQL(sql, table) {
+  if (!ALLOWED_TABLES.has(table)) {
+    throw new Error(
+      `Invalid table: "${table}". Allowed: ${[...ALLOWED_TABLES].join(', ')}`
+    );
+  }
+  return db.exec(sql);
+}
 
 // Send a JSON response with status code
 function jsonResponse(res, statusCode, data) {
@@ -158,7 +189,6 @@ function parseRequestBody(req, res) {
     req.on('data', chunk => {
       totalBytes += chunk.length;
       if (totalBytes > MAX_BODY_BYTES) {
-        jsonResponse(res, 413, { error: 'Request body too large' });
         req.destroy();
         reject(new Error('Payload too large'));
         return;
@@ -182,13 +212,15 @@ function parseRequestBody(req, res) {
   });
 }
 
-// Check for duplicate date in a given table
-function dateExists(table, date) {
-  const stmt = db.prepare(`SELECT COUNT(*) AS cnt FROM ${table} WHERE date = ?`);
-  stmt.bind([date]);
-  const row = stmt.getAsObject();
-  stmt.free();
-  return row.cnt > 0;
+// Convert sql.js exec() result to an array of column-keyed objects
+function rowsToObjects(results) {
+  if (results.length === 0 || results[0].values.length === 0) return [];
+  const columns = results[0].columns;
+  return results[0].values.map(row => {
+    const obj = {};
+    columns.forEach((col, i) => obj[col] = row[i]);
+    return obj;
+  });
 }
 
 // ──────────────────────────────────────────────
@@ -198,17 +230,8 @@ function dateExists(table, date) {
 // Handle GET for a given table
 function handleGetMetrics(res, table, label) {
   try {
-    const results = db.exec(`SELECT * FROM ${table} ORDER BY date ASC`);
-    if (results.length === 0) {
-      jsonResponse(res, 200, []);
-      return;
-    }
-    const columns = results[0].columns;
-    const metrics = results[0].values.map(row => {
-      const obj = {};
-      columns.forEach((col, i) => obj[col] = row[i]);
-      return obj;
-    });
+    const results = execSQL(`SELECT * FROM ${table} ORDER BY date ASC`, table);
+    const metrics = rowsToObjects(results);
     jsonResponse(res, 200, metrics);
   } catch (err) {
     console.error(`Error fetching ${label}:`, err);
@@ -216,7 +239,139 @@ function handleGetMetrics(res, table, label) {
   }
 }
 
-// Handle POST for a given table and value key (e.g. "p2p_value", "seedling_value")
+// ── Delete sub-handlers ──
+
+// Truncate entire table (with confirm=yes safety check)
+async function handleDeleteTruncate(req, res, table, label, refreshChannel) {
+  const confirm = new URL(req.url, `http://${req.headers.host || 'localhost'}`).searchParams.get('confirm');
+  if (confirm !== 'yes') {
+    jsonResponse(res, 400, {
+      error: 'Missing or invalid confirm parameter. Use ?truncate=true&confirm=yes to proceed.',
+    });
+    return;
+  }
+
+  try {
+    execSQL(`DELETE FROM ${table}`, table);
+    execSQL(`DELETE FROM sqlite_sequence WHERE name = '${table}'`, table);
+    saveDatabase();
+
+    if (refreshChannel && mainWindow) {
+      mainWindow.webContents.send(refreshChannel);
+    }
+
+    jsonResponse(res, 200, {
+      success: true,
+      message: `Truncated ${label} — all records deleted`,
+    });
+  } catch (err) {
+    console.error(`Error truncating ${label}:`, err);
+    jsonResponse(res, 500, { error: `Failed to truncate ${label}` });
+  }
+}
+
+// Delete a record by id
+async function handleDeleteById(res, table, label, refreshChannel, id) {
+  try {
+    // Check if record exists first
+    const checkResult = execSQL(`SELECT id FROM ${table} WHERE id = ${id}`, table);
+    if (checkResult.length === 0 || checkResult[0].values.length === 0) {
+      jsonResponse(res, 404, { error: `No record found in ${table} with id ${id}` });
+      return;
+    }
+
+    execSQL(`DELETE FROM ${table} WHERE id = ${id}`, table);
+    saveDatabase();
+
+    if (refreshChannel && mainWindow) {
+      mainWindow.webContents.send(refreshChannel);
+    }
+
+    jsonResponse(res, 200, {
+      success: true,
+      message: `Deleted record from ${label} with id ${id}`,
+    });
+  } catch (err) {
+    console.error(`Error deleting ${label}:`, err);
+    jsonResponse(res, 500, { error: `Failed to delete ${label}` });
+  }
+}
+
+// Delete a record by date
+async function handleDeleteByDate(res, table, label, refreshChannel, date) {
+  try {
+    // Check if record exists first
+    const checkResult = execSQL(`SELECT id FROM ${table} WHERE date = '${date}'`, table);
+    if (checkResult.length === 0 || checkResult[0].values.length === 0) {
+      jsonResponse(res, 404, { error: `No record found in ${table} for date "${date}"` });
+      return;
+    }
+
+    execSQL(`DELETE FROM ${table} WHERE date = '${date}'`, table);
+    saveDatabase();
+
+    if (refreshChannel && mainWindow) {
+      mainWindow.webContents.send(refreshChannel);
+    }
+
+    jsonResponse(res, 200, {
+      success: true,
+      message: `Deleted record from ${label} for date "${date}"`,
+    });
+  } catch (err) {
+    console.error(`Error deleting ${label}:`, err);
+    jsonResponse(res, 500, { error: `Failed to delete ${label}` });
+  }
+}
+
+// Handle DELETE for a given table by date or id
+function isValidPositiveInt(val) {
+  if (val === undefined || val === null || val === '') return false;
+  const n = Number(val);
+  return Number.isInteger(n) && n > 0;
+}
+
+async function handleDeleteMetrics(req, res, table, label, refreshChannel) {
+  if (!isValidApiKey(req)) {
+    jsonResponse(res, 401, { error: 'Unauthorized. Provide x-api-key header.' });
+    return;
+  }
+
+  const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const truncate = parsedUrl.searchParams.get('truncate');
+  const idRaw = parsedUrl.searchParams.get('id');
+  const date = parsedUrl.searchParams.get('date');
+
+  // Truncate (delete all rows) — highest priority
+  if (truncate === 'true' || truncate === '1') {
+    await handleDeleteTruncate(req, res, table, label, refreshChannel);
+    return;
+  }
+
+  // id takes priority if both are provided
+  if (idRaw) {
+    if (!isValidPositiveInt(idRaw)) {
+      jsonResponse(res, 400, { error: `Invalid id. Must be a positive integer, got "${idRaw}"` });
+      return;
+    }
+    await handleDeleteById(res, table, label, refreshChannel, parseInt(idRaw, 10));
+    return;
+  }
+
+  if (date) {
+    if (!isValidDate(date)) {
+      jsonResponse(res, 400, { error: `Invalid date format. Expected YYYY-MM-DD, got "${date}"` });
+      return;
+    }
+    await handleDeleteByDate(res, table, label, refreshChannel, date);
+    return;
+  }
+
+  jsonResponse(res, 400, {
+    error: 'Missing query parameter. Provide ?date=YYYY-MM-DD, ?id=<number>, or ?truncate=true&confirm=yes',
+  });
+}
+
 async function handlePostMetrics(req, res, table, valueKey, label, refreshChannel) {
   if (!isValidApiKey(req)) {
     jsonResponse(res, 401, { error: 'Unauthorized. Provide x-api-key header.' });
@@ -227,12 +382,14 @@ async function handlePostMetrics(req, res, table, valueKey, label, refreshChanne
   try {
     parsed = await parseRequestBody(req, res);
   } catch (err) {
+    if (err.message === 'Payload too large') {
+      jsonResponse(res, 413, { error: 'Request body too large' });
+      return;
+    }
     const msg = err.message === 'Invalid JSON' ? 'Invalid JSON in request body' : 'Empty request body';
     jsonResponse(res, 400, { error: msg });
     return;
   }
-  // If parseRequestBody already sent a response (413, destroyed), bail out
-  if (!parsed) return;
 
   const { date, [valueKey]: rawValue, month: explicitMonth } = parsed;
 
@@ -263,28 +420,37 @@ async function handlePostMetrics(req, res, table, valueKey, label, refreshChanne
   const numericValue = parseFloat(rawValue);
   const month = explicitMonth || date.substring(0, 7);
 
-  // ── Check duplicate date ──
-  if (dateExists(table, date)) {
-    jsonResponse(res, 409, {
-      error: `Duplicate entry for date "${date}". A record already exists in ${table}.`,
-    });
-    return;
-  }
-
-  // ── Insert ──
+  // ── Insert with duplicate handling (INSERT OR IGNORE) ──
   try {
-    const stmt = db.prepare(
-      `INSERT INTO ${table} (date, month, daily_value) VALUES (?, ?, ?)`
-    );
-    stmt.run([date, month, numericValue]);
-    stmt.free();
+    // Use db.run() + getRowsModified() — db.exec() returns [] for INSERT,
+    // so rowsAffected is always 0. Inputs are validated so SQL injection
+    // is not a concern (date checked by isValidDate, month derived from date,
+    // numericValue checked by isValidPositiveNumber).
+    const insertSql = `INSERT OR IGNORE INTO ${table} (date, month, daily_value) VALUES ('${date}', '${month}', ${numericValue})`;
+    db.run(insertSql);
+
+    // getRowsModified() returns 1 if inserted, 0 if ignored (duplicate date)
+    if (db.getRowsModified() === 0) {
+      jsonResponse(res, 409, {
+        error: `Duplicate entry for date "${date}". A record already exists in ${table}.`,
+      });
+      return;
+    }
+
     saveDatabase();
 
-    const lastId = db.exec('SELECT last_insert_rowid()')[0].values[0][0];
+    // Use MAX(id) instead of last_insert_rowid() — MAX is more reliable across sql.js versions
+    const idResult = execSQL(`SELECT MAX(id) AS id FROM ${table}`, table);
+    const lastId = idResult.length > 0 && idResult[0].values.length > 0
+      ? idResult[0].values[0][0]
+      : null;
 
     // Notify Electron window to refresh
     if (mainWindow && mainWindow.webContents && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(refreshChannel);
+      console.log(`[IPC] Sent refresh event: ${refreshChannel}`);
+    } else {
+      console.log(`[IPC] Skipped refresh — mainWindow unavailable or destroyed`);
     }
 
     jsonResponse(res, 201, {
@@ -304,11 +470,33 @@ async function handlePostMetrics(req, res, table, valueKey, label, refreshChanne
 //  HTTP Server
 // ──────────────────────────────────────────────
 
+// Dispatch GET/POST/DELETE for a metrics route
+function dispatchMetricsRoute(req, res, table, valueKey, label, refreshChannel) {
+  if (req.method === 'GET') {
+    handleGetMetrics(res, table, label);
+    return;
+  }
+  if (req.method === 'POST') {
+    handlePostMetrics(req, res, table, valueKey, label, refreshChannel);
+    return;
+  }
+  if (req.method === 'DELETE') {
+    handleDeleteMetrics(req, res, table, label, refreshChannel);
+    return;
+  }
+  jsonResponse(res, 405, { error: 'Method not allowed. Use GET, POST, or DELETE.' });
+}
+
+const metricRoutes = [
+  { url: '/api/p2p-metrics', table: 'p2p_metrics', valueKey: 'p2p_value', label: 'P2P metric', refresh: REFRESH_P2P },
+  { url: '/api/seedling-metrics', table: 'seedling_metrics', valueKey: 'seedling_value', label: 'Seedling metric', refresh: REFRESH_SEEDLING },
+];
+
 function startHttpServer() {
   const server = http.createServer((req, res) => {
     const origin = req.headers.origin;
     res.setHeader('Access-Control-Allow-Origin', origin || '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
 
     if (req.method === 'OPTIONS') {
@@ -319,32 +507,11 @@ function startHttpServer() {
 
     const url = req.url.split('?')[0];
 
-    // ── P2P routes ──
-    if (url === '/api/p2p-metrics') {
-      if (req.method === 'GET') {
-        handleGetMetrics(res, 'p2p_metrics', 'P2P metrics');
+    for (const route of metricRoutes) {
+      if (url === route.url) {
+        dispatchMetricsRoute(req, res, route.table, route.valueKey, route.label, route.refresh);
         return;
       }
-      if (req.method === 'POST') {
-        handlePostMetrics(req, res, 'p2p_metrics', 'p2p_value', 'P2P metric', 'p2p-metrics:refresh');
-        return;
-      }
-      jsonResponse(res, 405, { error: 'Method not allowed. Use GET or POST.' });
-      return;
-    }
-
-    // ── Seedling routes ──
-    if (url === '/api/seedling-metrics') {
-      if (req.method === 'GET') {
-        handleGetMetrics(res, 'seedling_metrics', 'Seedling metrics');
-        return;
-      }
-      if (req.method === 'POST') {
-        handlePostMetrics(req, res, 'seedling_metrics', 'seedling_value', 'Seedling metric', 'seedling-metrics:refresh');
-        return;
-      }
-      jsonResponse(res, 405, { error: 'Method not allowed. Use GET or POST.' });
-      return;
     }
 
     // 404 for unknown routes
@@ -362,30 +529,16 @@ function startHttpServer() {
   });
 }
 
+function createGetMetricsHandler(table) {
+  return () => {
+    const results = execSQL(`SELECT * FROM ${table} ORDER BY date ASC`, table);
+    return rowsToObjects(results);
+  };
+}
+
 function setupIPC() {
-  ipcMain.handle('db:getP2PMetrics', () => {
-    const results = db.exec('SELECT * FROM p2p_metrics ORDER BY date ASC');
-    if (results.length === 0) return [];
-
-    const columns = results[0].columns;
-    return results[0].values.map(row => {
-      const obj = {};
-      columns.forEach((col, i) => obj[col] = row[i]);
-      return obj;
-    });
-  });
-
-  ipcMain.handle('db:getSeedlingMetrics', () => {
-    const results = db.exec('SELECT * FROM seedling_metrics ORDER BY date ASC');
-    if (results.length === 0) return [];
-
-    const columns = results[0].columns;
-    return results[0].values.map(row => {
-      const obj = {};
-      columns.forEach((col, i) => obj[col] = row[i]);
-      return obj;
-    });
-  });
+  ipcMain.handle(GET_P2P_METRICS, createGetMetricsHandler('p2p_metrics'));
+  ipcMain.handle(GET_SEEDLING_METRICS, createGetMetricsHandler('seedling_metrics'));
 
   ipcMain.handle('server:getInfo', () => {
     return {

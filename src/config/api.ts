@@ -12,8 +12,8 @@ export const API_CONFIG = {
   // Seedling endpoint
   SEEDLING_ENDPOINT: '/api/seedling-metrics',
 
-  // Poll interval in milliseconds (60000 = 1 minute)
-  POLL_INTERVAL: 60000,
+  // Poll interval in milliseconds (30000 = 30 seconds)
+  POLL_INTERVAL: 30000,
 };
 
 export const P2P_API_URL = `${API_CONFIG.BASE_URL}${API_CONFIG.P2P_ENDPOINT}`;

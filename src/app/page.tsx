@@ -1,225 +1,147 @@
-/* eslint-disable react-hooks/set-state-in-effect */
-/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 /// <reference path="../types/electron.d.ts" />
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import AreaChartCard from '@/components/AreaChartCard';
 import FooterSummary from '@/components/FooterSummary';
 import { P2P_API_URL, SEEDLING_API_URL, API_CONFIG } from '@/config/api';
 import {
-  MOCK_P2P_METRICS,
-  MOCK_SEEDLING_DAILY,
-  MOCK_P2P_MONTHLY,
-  MOCK_SEEDLING_MONTHLY,
-  getP2PAverages,
-  getSeedlingAverages,
+  getAverages,
   formatDailyChartData,
-  getMonthlyWindowKeys,
-} from '@/config/mockData';
+  aggregateByMonth,
+  buildMonthlyChartData,
+} from '@/config/chartUtils';
 import type { P2PMetric, SeedlingMetric, ChartDataPoint } from '@/types';
+
+// ── Shared helpers ──
+
+// Determine if a daily chart is in danger mode (first date > last date)
+function calcDanger(data: ChartDataPoint[]): boolean {
+  if (data.length < 2) return false;
+  const first = data[0].fullDate;
+  const last = data[data.length - 1].fullDate;
+  if (!first || !last) return false;
+  return first > last;
+}
+
+// Fetch metrics from a given API endpoint and set the result via the state setter
+async function fetchMetrics<T>(
+  url: string,
+  setter: React.Dispatch<React.SetStateAction<T[]>>,
+  onError?: () => void,
+  onSuccess?: () => void
+): Promise<void> {
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (!response.ok) {
+      onError?.();
+      return;
+    }
+
+    const data = await response.json();
+
+    if (Array.isArray(data)) {
+      setter(data as T[]);
+    }
+    onSuccess?.();
+  } catch {
+    onError?.();
+  }
+}
+
+// Build daily chart data (31-day backward window) from raw metrics
+function buildDailyData(
+  metrics: { date: string; daily_value: number }[]
+): ChartDataPoint[] {
+  if (metrics.length === 0) return [];
+  const sorted = [...metrics].sort((a, b) => a.date.localeCompare(b.date));
+  const last31 = sorted.slice(-31);
+  return formatDailyChartData(
+    last31.map(m => ({ date: m.date, value: m.daily_value }))
+  );
+}
 
 export default function Dashboard() {
   const [p2pMetrics, setP2pMetrics] = useState<P2PMetric[]>([]);
   const [seedlingMetrics, setSeedlingMetrics] = useState<SeedlingMetric[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  // Fetch P2P metrics from the Electron HTTP server (for Graph 1)
-  const fetchP2PMetrics = async () => {
-    try {
-      const response = await fetch(P2P_API_URL, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      if (!response.ok) return;
-
-      const data = await response.json();
-
-      if (Array.isArray(data) && data.length > 0) {
-        setP2pMetrics(data);
-      } else if (p2pMetrics.length === 0) {
-        setP2pMetrics(MOCK_P2P_METRICS);
-      }
-    } catch {
-      if (p2pMetrics.length === 0) {
-        setP2pMetrics(MOCK_P2P_METRICS);
-      }
-    }
-  };
-
-  // Fetch Seedling metrics from the Electron HTTP server (for Graph 2)
-  const fetchSeedlingMetrics = async () => {
-    try {
-      const response = await fetch(SEEDLING_API_URL, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      if (!response.ok) return;
-
-      const data = await response.json();
-
-      if (Array.isArray(data) && data.length > 0) {
-        setSeedlingMetrics(data);
-      } else if (seedlingMetrics.length === 0) {
-        setSeedlingMetrics(MOCK_P2P_METRICS as SeedlingMetric[]);
-      }
-    } catch {
-      if (seedlingMetrics.length === 0) {
-        setSeedlingMetrics(MOCK_P2P_METRICS as SeedlingMetric[]);
-      }
-    }
-  };
+  const [initialLoad, setInitialLoad] = useState(true);
+  const [apiError, setApiError] = useState(false);
+  const clearError = useCallback(() => setApiError(false), []);
 
   useEffect(() => {
     Promise.all([
-      fetchP2PMetrics(),
-      fetchSeedlingMetrics(),
+      fetchMetrics(P2P_API_URL, setP2pMetrics, () => setApiError(true), clearError),
+      fetchMetrics(SEEDLING_API_URL, setSeedlingMetrics, () => setApiError(true), clearError),
     ]).finally(() => {
-      setLoading(false);
+      setInitialLoad(false);
     });
 
     let pollInterval: NodeJS.Timeout | null = null;
     if (API_CONFIG.POLL_INTERVAL > 0) {
       pollInterval = setInterval(() => {
-        fetchP2PMetrics();
-        fetchSeedlingMetrics();
+        fetchMetrics(P2P_API_URL, setP2pMetrics, () => setApiError(true), clearError);
+        fetchMetrics(SEEDLING_API_URL, setSeedlingMetrics, () => setApiError(true), clearError);
       }, API_CONFIG.POLL_INTERVAL);
     }
 
-    if (typeof window !== 'undefined' && window.electronAPI) {
-      window.electronAPI.onRefreshP2PMetrics(() => {
-        fetchP2PMetrics();
-      });
-      window.electronAPI.onRefreshSeedlingMetrics(() => {
-        fetchSeedlingMetrics();
-      });
-    }
+    window.electronAPI?.onRefreshP2PMetrics(() => {
+      fetchMetrics(P2P_API_URL, setP2pMetrics, () => setApiError(true), clearError);
+    });
+    window.electronAPI?.onRefreshSeedlingMetrics(() => {
+      fetchMetrics(SEEDLING_API_URL, setSeedlingMetrics, () => setApiError(true), clearError);
+    });
 
     return () => {
       if (pollInterval) clearInterval(pollInterval);
-      if (typeof window !== 'undefined' && window.electronAPI) {
-        window.electronAPI.removeRefreshListener();
-        window.electronAPI.removeSeedlingRefreshListener();
-      }
+      window.electronAPI?.removeRefreshListener();
+      window.electronAPI?.removeSeedlingRefreshListener();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Graph 1: DAILY P2P SPRAYED — from DB (last 31 days)
-  const dailyP2PData = useMemo<ChartDataPoint[]>(() => {
-    const sorted = [...p2pMetrics].sort((a, b) => a.date.localeCompare(b.date));
-    const last31 = sorted.slice(-31);
-    return formatDailyChartData(
-      last31.map(m => ({ date: m.date, value: m.daily_value }))
-    );
-  }, [p2pMetrics]);
+  const dailyP2PData = useMemo(() => buildDailyData(p2pMetrics), [p2pMetrics]);
 
   // Danger: true when the first data point's date > last data point's date on the daily graph
-  const p2pDanger = useMemo(() => {
-    if (dailyP2PData.length < 2) return false;
-    const first = dailyP2PData[0].fullDate;
-    const last = dailyP2PData[dailyP2PData.length - 1].fullDate;
-    if (!first || !last) return false;
-    return first > last;
-  }, [dailyP2PData]);
+  const p2pDanger = useMemo(() => calcDanger(dailyP2PData), [dailyP2PData]);
 
   // Graph 3: MONTHLY P2P SPRAYED — derived from DB data, 12-month rolling window
   const monthlyP2PData = useMemo<ChartDataPoint[]>(() => {
-    const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-    // Aggregate daily values by month
-    const monthMap: Record<string, number> = {};
-    for (const m of p2pMetrics) {
-      if (!monthMap[m.month]) monthMap[m.month] = 0;
-      monthMap[m.month] += m.daily_value;
-    }
-
-    // Map to 12-month rolling window
-    const windowKeys = getMonthlyWindowKeys();
-    return windowKeys.map((key) => {
-      const [y, m] = key.split('-').map(Number);
-      const monthIndex = m - 1;
-      const value = monthMap[key] ?? 0;
-      return {
-        label: MONTH_NAMES[monthIndex],
-        value: Math.round(value * 100) / 100,
-        fullDate: key,
-        monthName: MONTH_NAMES[monthIndex],
-      };
-    });
+    if (p2pMetrics.length === 0) return [];
+    const monthMap = aggregateByMonth(p2pMetrics);
+    return buildMonthlyChartData(monthMap);
   }, [p2pMetrics]);
 
-  // Graph 2: DAILY SEEDLING SPRAYED — from API (last 31 days), fallback to mock
-  const seedlingDailyData = useMemo<ChartDataPoint[]>(() => {
-    if (seedlingMetrics.length > 0) {
-      const sorted = [...seedlingMetrics].sort((a, b) => a.date.localeCompare(b.date));
-      const last31 = sorted.slice(-31);
-      return formatDailyChartData(
-        last31.map(m => ({ date: m.date, value: m.daily_value }))
-      );
-    }
-    return MOCK_SEEDLING_DAILY;
-  }, [seedlingMetrics]);
+  // Graph 2: DAILY SEEDLING SPRAYED — from API (last 31 days)
+  const seedlingDailyData = useMemo(() => buildDailyData(seedlingMetrics), [seedlingMetrics]);
 
   // Danger for seedling daily graph
-  const seedlingDanger = useMemo(() => {
-    if (seedlingDailyData.length < 2) return false;
-    const first = seedlingDailyData[0].fullDate;
-    const last = seedlingDailyData[seedlingDailyData.length - 1].fullDate;
-    if (!first || !last) return false;
-    return first > last;
-  }, [seedlingDailyData]);
+  const seedlingDanger = useMemo(() => calcDanger(seedlingDailyData), [seedlingDailyData]);
 
   // Graph 4: MONTHLY SEEDLING SPRAYED — derived from API data, 12-month rolling window
   const seedlingMonthlyData = useMemo<ChartDataPoint[]>(() => {
-    const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-    if (seedlingMetrics.length > 0) {
-      // Aggregate daily values by month
-      const monthMap: Record<string, number> = {};
-      for (const m of seedlingMetrics) {
-        const monthKey = m.month || m.date.substring(0, 7);
-        if (!monthMap[monthKey]) monthMap[monthKey] = 0;
-        monthMap[monthKey] += m.daily_value;
-      }
-
-      // Map to 12-month rolling window
-      const windowKeys = getMonthlyWindowKeys();
-      return windowKeys.map((key) => {
-        const [y, m] = key.split('-').map(Number);
-        const monthIndex = m - 1;
-        const value = monthMap[key] ?? 0;
-        return {
-          label: MONTH_NAMES[monthIndex],
-          value: Math.round(value * 100) / 100,
-          fullDate: key,
-          monthName: MONTH_NAMES[monthIndex],
-        };
-      });
-    }
-    return MOCK_SEEDLING_MONTHLY;
+    if (seedlingMetrics.length === 0) return [];
+    const monthMap = aggregateByMonth(seedlingMetrics);
+    return buildMonthlyChartData(monthMap);
   }, [seedlingMetrics]);
 
   // Footer averages
-  const p2pAverages = useMemo(() => getP2PAverages(p2pMetrics), [p2pMetrics]);
-  const seedlingAverages = useMemo(() => {
-    if (seedlingMetrics.length > 0) {
-      return getSeedlingAverages(seedlingMetrics);
-    }
-    // Fallback: build data shape from MOCK_SEEDLING_DAILY
-    const fallbackData = MOCK_SEEDLING_DAILY.map(d => ({
-      date: d.fullDate || '',
-      daily_value: d.value,
-    })).filter(d => d.date);
-    return getSeedlingAverages(fallbackData);
-  }, [seedlingMetrics]);
+  const p2pAverages = useMemo(() => getAverages(p2pMetrics), [p2pMetrics]);
+  const seedlingAverages = useMemo(() => getAverages(seedlingMetrics), [seedlingMetrics]);
+
+  // Loading state: show spinner during first fetch attempt (even if DB is empty)
+  const loading = useMemo(() => {
+    return initialLoad && p2pMetrics.length === 0 && seedlingMetrics.length === 0;
+  }, [initialLoad, p2pMetrics, seedlingMetrics]);
 
   if (loading) {
     return (
-      <main className="flex flex-col h-screen bg-[#050505] text-white items-center justify-center">
+      <main className="flex flex-col h-screen bg-[var(--sprayed-bg)] text-white items-center justify-center">
         <div className="text-[#888] text-lg">Loading dashboard...</div>
       </main>
     );
@@ -227,6 +149,11 @@ export default function Dashboard() {
 
   return (
     <main className="main-layout select-none">
+      {apiError && (
+        <div className="error-banner">
+          Connection error — retrying every {API_CONFIG.POLL_INTERVAL / 1000}s
+        </div>
+      )}
       {/* 4 Graph Section (2x2 grid) */}
       <div className="dashboard-grid">
         {/* Graph 1: DAILY P2P SPRAYED — Top Left (from SQLite DB) */}
@@ -241,7 +168,7 @@ export default function Dashboard() {
           tickSpacing={3}
         />
 
-        {/* Graph 2: DAILY SEEDLING SPRAYED — Top Right (hardcoded) */}
+        {/* Graph 2: DAILY SEEDLING SPRAYED — Top Right (from API) */}
         <AreaChartCard
           title="DAILY SEEDLING SPRAYED"
           data={seedlingDailyData}
@@ -263,7 +190,7 @@ export default function Dashboard() {
           yAxisLabel="Total Tree"
         />
 
-        {/* Graph 4: MONTHLY SEEDLING SPRAYED — Bottom Right (hardcoded) */}
+        {/* Graph 4: MONTHLY SEEDLING SPRAYED — Bottom Right (from API) */}
         <AreaChartCard
           title="MONTHLY SEEDLING SPRAYED"
           data={seedlingMonthlyData}
