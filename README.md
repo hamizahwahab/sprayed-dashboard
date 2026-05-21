@@ -143,14 +143,3 @@ HTTP_PORT=9000 npm run electron:dev
 | `npm run electron:dev:3001` | Dev server + Electron on port 3001 |
 | `npm run electron:build` | Build + package portable `.exe` |
 | `npm run electron:start` | Run Electron in production mode |
-
-## Documentation
-
-Full documentation is in `sprayed-dashboard-docs/`:
-
-| File | Purpose |
-|---|---|
-| `PROJECT_MEMORY.md` | Architecture reference |
-| `PROGRESS.md` | Session-by-session progress log |
-| `RUNNING_BOTH_DASHBOARDS.md` | Running AGS + Sprayed side by side |
-| `sprayed-dashboard.postman_collection.json` | Postman collection |
