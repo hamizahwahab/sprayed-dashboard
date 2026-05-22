@@ -29,7 +29,7 @@ export function formatDailyChartData(
     prevMonth = month;
 
     result.push({
-      label: isMonthStart ? `${MONTH_NAMES[month]} ${dayNum}` : String(dayNum),
+      label: isMonthStart ? MONTH_NAMES[month] : String(dayNum),
       value,
       fullDate: date,
       isMonthStart,
@@ -38,6 +38,58 @@ export function formatDailyChartData(
   }
 
   return result;
+}
+
+function formatDateIso(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export function buildDailyWindowData(
+  source: { date: string; value: number }[],
+  windowDays = 31,
+  endDate?: string
+): ChartDataPoint[] {
+  if (windowDays < 1) return [];
+
+  const now = endDate ? new Date(`${endDate}T00:00:00`) : new Date();
+  const windowEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const windowStart = new Date(windowEnd);
+  windowStart.setDate(windowEnd.getDate() - (windowDays - 1));
+
+  const valueMap: Record<string, number> = {};
+  for (const item of source) {
+    if (!item?.date) continue;
+    valueMap[item.date] = item.value;
+  }
+
+  const points: { date: string; value: number }[] = [];
+  for (let current = new Date(windowStart); current <= windowEnd; current.setDate(current.getDate() + 1)) {
+    const dateKey = formatDateIso(current);
+    points.push({ date: dateKey, value: valueMap[dateKey] ?? 0 });
+  }
+
+  return formatDailyChartData(points);
+}
+
+/**
+ * Check if the window end date (today by default) exists as real data in the source.
+ * Used to validate whether the daily chart window is complete before applying danger logic.
+ *
+ * @param source - Raw metrics with date strings
+ * @param endDate - Optional end date; defaults to today
+ * @returns true if endDate exists in source, false otherwise
+ */
+export function isWindowComplete(
+  source: { date: string; value: number }[],
+  endDate?: string
+): boolean {
+  const now = endDate ? new Date(`${endDate}T00:00:00`) : new Date();
+  const windowEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const endDateKey = formatDateIso(windowEnd);
+  return source.some(item => item.date === endDateKey);
 }
 
 // Format year-month key (e.g. 2026-05)

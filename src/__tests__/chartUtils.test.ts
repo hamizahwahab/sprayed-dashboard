@@ -1,4 +1,4 @@
-import { getMonthlyWindowKeys, getAverages, formatDailyChartData, aggregateByMonth, buildMonthlyChartData } from '@/config/chartUtils';
+import { getMonthlyWindowKeys, getAverages, formatDailyChartData, buildDailyWindowData, isWindowComplete, aggregateByMonth, buildMonthlyChartData } from '@/config/chartUtils';
 
 describe('chartUtils', () => {
   describe('getMonthlyWindowKeys', () => {
@@ -75,7 +75,7 @@ describe('chartUtils', () => {
         { date: '2026-01-02', value: 20 },
       ];
       const result = formatDailyChartData(data);
-      expect(result.map(r => r.label)).toEqual(['Jan 1', '2', '3']);
+      expect(result.map(r => r.label)).toEqual(['Jan', '2', '3']);
       expect(result.map(r => r.value)).toEqual([10, 20, 30]);
     });
 
@@ -87,6 +87,77 @@ describe('chartUtils', () => {
       const result = formatDailyChartData(data);
       expect(result[1].isMonthStart).toBe(true);
       expect(result[1].monthName).toBe('Feb');
+      expect(result[1].label).toBe('Feb');
+    });
+  });
+
+  describe('buildDailyWindowData', () => {
+    it('returns a fixed window of dates ending on the given end date', () => {
+      const source = [
+        { date: '2026-01-01', value: 10 },
+        { date: '2026-01-03', value: 20 },
+      ];
+      const result = buildDailyWindowData(source, 5, '2026-01-05');
+
+      expect(result).toHaveLength(5);
+      expect(result.map(r => r.fullDate)).toEqual([
+        '2026-01-01',
+        '2026-01-02',
+        '2026-01-03',
+        '2026-01-04',
+        '2026-01-05',
+      ]);
+      expect(result.map(r => r.value)).toEqual([10, 0, 20, 0, 0]);
+    });
+
+    it('drops dates that fall after the window end date', () => {
+      const source = [
+        { date: '2026-01-01', value: 10 },
+        { date: '2026-01-06', value: 50 },
+      ];
+      const result = buildDailyWindowData(source, 5, '2026-01-05');
+
+      expect(result.some(r => r.fullDate === '2026-01-06')).toBe(false);
+      expect(result.map(r => r.value)).toEqual([10, 0, 0, 0, 0]);
+    });
+  });
+
+  describe('isWindowComplete', () => {
+    it('returns true when end date exists in source', () => {
+      const source = [
+        { date: '2026-01-01', value: 10 },
+        { date: '2026-01-05', value: 50 },
+      ];
+      const result = isWindowComplete(source, '2026-01-05');
+      expect(result).toBe(true);
+    });
+
+    it('returns false when end date is missing', () => {
+      const source = [
+        { date: '2026-01-01', value: 10 },
+        { date: '2026-01-04', value: 40 },
+      ];
+      const result = isWindowComplete(source, '2026-01-05');
+      expect(result).toBe(false);
+    });
+
+    it('returns false for empty source', () => {
+      const result = isWindowComplete([], '2026-01-05');
+      expect(result).toBe(false);
+    });
+
+    it('uses today as default end date', () => {
+      const today = new Date();
+      const year = today.getFullYear();
+      const month = String(today.getMonth() + 1).padStart(2, '0');
+      const day = String(today.getDate()).padStart(2, '0');
+      const todayKey = `${year}-${month}-${day}`;
+
+      const source = [
+        { date: todayKey, value: 100 },
+      ];
+      const result = isWindowComplete(source);
+      expect(result).toBe(true);
     });
   });
 

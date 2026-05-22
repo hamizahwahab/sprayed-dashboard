@@ -8,7 +8,8 @@ import FooterSummary from '@/components/FooterSummary';
 import { P2P_API_URL, SEEDLING_API_URL, API_CONFIG } from '@/config/api';
 import {
   getAverages,
-  formatDailyChartData,
+  buildDailyWindowData,
+  isWindowComplete,
   aggregateByMonth,
   buildMonthlyChartData,
 } from '@/config/chartUtils';
@@ -16,13 +17,12 @@ import type { P2PMetric, SeedlingMetric, ChartDataPoint } from '@/types';
 
 // ── Shared helpers ──
 
-// Determine if a daily chart is in danger mode (first date > last date)
+// Determine if a daily chart is in danger mode (value decreased from earliest to latest date)
 function calcDanger(data: ChartDataPoint[]): boolean {
   if (data.length < 2) return false;
-  const first = data[0].fullDate;
-  const last = data[data.length - 1].fullDate;
-  if (!first || !last) return false;
-  return first > last;
+  const firstValue = data[0].value;
+  const lastValue = data[data.length - 1].value;
+  return firstValue > lastValue;
 }
 
 // Fetch metrics from a given API endpoint and set the result via the state setter
@@ -54,15 +54,14 @@ async function fetchMetrics<T>(
   }
 }
 
-// Build daily chart data (31-day backward window) from raw metrics
+// Build daily chart data from raw metrics using a fixed 31-day window ending today
 function buildDailyData(
   metrics: { date: string; daily_value: number }[]
 ): ChartDataPoint[] {
   if (metrics.length === 0) return [];
-  const sorted = [...metrics].sort((a, b) => a.date.localeCompare(b.date));
-  const last31 = sorted.slice(-31);
-  return formatDailyChartData(
-    last31.map(m => ({ date: m.date, value: m.daily_value }))
+  return buildDailyWindowData(
+    metrics.map(m => ({ date: m.date, value: m.daily_value })),
+    31
   );
 }
 
@@ -104,11 +103,16 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Graph 1: DAILY P2P SPRAYED — from DB (last 31 days)
+  // Graph 1: DAILY P2P SPRAYED — from DB, fixed window ending today (31 days)
   const dailyP2PData = useMemo(() => buildDailyData(p2pMetrics), [p2pMetrics]);
 
-  // Danger: true when the first data point's date > last data point's date on the daily graph
-  const p2pDanger = useMemo(() => calcDanger(dailyP2PData), [dailyP2PData]);
+  // Danger: only true if window is complete AND earliest value > latest value
+  const p2pDanger = useMemo(() => {
+    const windowComplete = isWindowComplete(
+      p2pMetrics.map(m => ({ date: m.date, value: m.daily_value }))
+    );
+    return windowComplete && calcDanger(dailyP2PData);
+  }, [dailyP2PData, p2pMetrics]);
 
   // Graph 3: MONTHLY P2P SPRAYED — derived from DB data, 12-month rolling window
   const monthlyP2PData = useMemo<ChartDataPoint[]>(() => {
@@ -117,11 +121,16 @@ export default function Dashboard() {
     return buildMonthlyChartData(monthMap);
   }, [p2pMetrics]);
 
-  // Graph 2: DAILY SEEDLING SPRAYED — from API (last 31 days)
+  // Graph 2: DAILY SEEDLING SPRAYED — from API, fixed window ending today (31 days)
   const seedlingDailyData = useMemo(() => buildDailyData(seedlingMetrics), [seedlingMetrics]);
 
-  // Danger for seedling daily graph
-  const seedlingDanger = useMemo(() => calcDanger(seedlingDailyData), [seedlingDailyData]);
+  // Danger: only true if window is complete AND earliest value > latest value
+  const seedlingDanger = useMemo(() => {
+    const windowComplete = isWindowComplete(
+      seedlingMetrics.map(m => ({ date: m.date, value: m.daily_value }))
+    );
+    return windowComplete && calcDanger(seedlingDailyData);
+  }, [seedlingDailyData, seedlingMetrics]);
 
   // Graph 4: MONTHLY SEEDLING SPRAYED — derived from API data, 12-month rolling window
   const seedlingMonthlyData = useMemo<ChartDataPoint[]>(() => {
